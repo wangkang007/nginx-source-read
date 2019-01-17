@@ -1,17 +1,31 @@
 ## nginx 内存分配
 ## nginx 内存池的数据结构
 ```c
+struct ngx_pool_large_s {
+    ngx_pool_large_t     *next;
+    void                 *alloc;
+};
+
+
+typedef struct {
+    u_char               *last;
+    u_char               *end;
+    ngx_pool_t           *next;
+    ngx_uint_t            failed;
+} ngx_pool_data_t;
+
 struct ngx_pool_s {
     ngx_pool_data_t       d; // 存储的数据
     size_t                max;
     ngx_pool_t           *current;//当前pool指针
-    ngx_chain_t          *chain;
-    ngx_pool_large_t     *large;
+    ngx_chain_t          *chain;//
+    ngx_pool_large_t     *large;//
     ngx_pool_cleanup_t   *cleanup;
-    ngx_log_t            *log;
+    ngx_log_t            *log;//日志
 };
 
 ```
+
 ```c
 ngx_pool_t *ngx_create_pool(size_t size, ngx_log_t *log)
 {
