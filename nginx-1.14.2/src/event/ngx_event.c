@@ -442,21 +442,23 @@ ngx_event_module_init(ngx_cycle_t *cycle)
     ccf = (ngx_core_conf_t *) ngx_get_conf(cycle->conf_ctx, ngx_core_module);
 
     ngx_timer_resolution = ccf->timer_resolution;
-
+//  如果不是win的系统
 #if !(NGX_WIN32)
     {
     ngx_int_t      limit;
     struct rlimit  rlmt;
-
+    //获取进程系统资源的最大使用量
     if (getrlimit(RLIMIT_NOFILE, &rlmt) == -1) {
         ngx_log_error(NGX_LOG_ALERT, cycle->log, ngx_errno,
                       "getrlimit(RLIMIT_NOFILE) failed, ignored");
 
     } else {
+        //如果设置得最大链接数大于当前进程的当前（软）限制 && 最大链接数大于进程文件打开数
         if (ecf->connections > (ngx_uint_t) rlmt.rlim_cur
             && (ccf->rlimit_nofile == NGX_CONF_UNSET
                 || ecf->connections > (ngx_uint_t) ccf->rlimit_nofile))
         {
+            //那么就以获取系统的为准
             limit = (ccf->rlimit_nofile == NGX_CONF_UNSET) ?
                          (ngx_int_t) rlmt.rlim_cur : ccf->rlimit_nofile;
 
@@ -469,11 +471,11 @@ ngx_event_module_init(ngx_cycle_t *cycle)
     }
 #endif /* !(NGX_WIN32) */
 
-
+    // 如果是master进程，就直接返回
     if (ccf->master == 0) {
         return NGX_OK;
     }
-
+    //如果已经初始化过了 因为多个进程只需初始化一次即可，
     if (ngx_accept_mutex_ptr) {
         return NGX_OK;
     }
@@ -511,7 +513,7 @@ ngx_event_module_init(ngx_cycle_t *cycle)
 
     ngx_accept_mutex_ptr = (ngx_atomic_t *) shared;
     ngx_accept_mutex.spin = (ngx_uint_t) -1;
-
+    //f分配共享内存
     if (ngx_shmtx_create(&ngx_accept_mutex, (ngx_shmtx_sh_t *) shared,
                          cycle->lock_file.data)
         != NGX_OK)
@@ -530,7 +532,7 @@ ngx_event_module_init(ngx_cycle_t *cycle)
     ngx_temp_number = (ngx_atomic_t *) (shared + 2 * cl);
 
     tp = ngx_timeofday();
-
+    //那到一个随机数
     ngx_random_number = (tp->msec << 16) + ngx_pid;
 
 #if (NGX_STAT_STUB)
@@ -577,7 +579,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
     ccf = (ngx_core_conf_t *) ngx_get_conf(cycle->conf_ctx, ngx_core_module);
     ecf = ngx_event_get_conf(cycle->conf_ctx, ngx_event_core_module);
-
+    //如果当前是master 并且worker的数量大于1 则启用nginx的锁机制
     if (ccf->master && ccf->worker_processes > 1 && ecf->accept_mutex) {
         ngx_use_accept_mutex = 1;
         ngx_accept_mutex_held = 0;
@@ -586,25 +588,28 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     } else {
         ngx_use_accept_mutex = 0;
     }
-
+//  如果是win平台的话就不使用锁，据说会有死锁
 #if (NGX_WIN32)
 
     /*
      * disable accept mutex on win32 as it may cause deadlock if
      * grabbed by a process which can't accept connections
      */
-
+    //如果一个抢占进程不能accept connections的话会导致死锁
     ngx_use_accept_mutex = 0;
 
 #endif
-
+    //  初始化两个队列 ngx_posted_accept_events、ngx_posted_events
     ngx_queue_init(&ngx_posted_accept_events);
     ngx_queue_init(&ngx_posted_events);
 
     if (ngx_event_timer_init(cycle->log) == NGX_ERROR) {
         return NGX_ERROR;
     }
-
+    //初始化 nginx配置用 使用use的模块
+    /**
+     * 例如配置了 use epoll 
+     */
     for (m = 0; cycle->modules[m]; m++) {
         if (cycle->modules[m]->type != NGX_EVENT_MODULE) {
             continue;
@@ -615,7 +620,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
         }
 
         module = cycle->modules[m]->ctx;
-
+        //调用模块的初始化方法
         if (module->actions.init(cycle, ngx_timer_resolution) != NGX_OK) {
             /* fatal */
             exit(2);
@@ -623,7 +628,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
         break;
     }
-
+//如果是win的平台
 #if !(NGX_WIN32)
 
     if (ngx_timer_resolution && !(ngx_event_flags & NGX_USE_TIMER_EVENT)) {
@@ -670,7 +675,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     }
 
 #else
-
+    // 如果设置了控制精度，那么将ngx_timer_resolution关闭
     if (ngx_timer_resolution && !(ngx_event_flags & NGX_USE_TIMER_EVENT)) {
         ngx_log_error(NGX_LOG_WARN, cycle->log, 0,
                       "the \"timer_resolution\" directive is not supported "
@@ -679,7 +684,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     }
 
 #endif
-
+   //分配cycle的connections内存大小
     cycle->connections =
         ngx_alloc(sizeof(ngx_connection_t) * cycle->connection_n, cycle->log);
     if (cycle->connections == NULL) {
@@ -687,19 +692,19 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     }
 
     c = cycle->connections;
-
+    // 分配读事件的空间
     cycle->read_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n,
                                    cycle->log);
     if (cycle->read_events == NULL) {
         return NGX_ERROR;
     }
-
     rev = cycle->read_events;
+    //初始化数据
     for (i = 0; i < cycle->connection_n; i++) {
         rev[i].closed = 1;
         rev[i].instance = 1;
     }
-
+    //初始化写事件
     cycle->write_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n,
                                     cycle->log);
     if (cycle->write_events == NULL) {
@@ -713,26 +718,34 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
     i = cycle->connection_n;
     next = NULL;
-
+    //预先分配好每个链接中读和写使用的内存
     do {
         i--;
-
+        //connections链表
         c[i].data = next;
+        //读写事件地址
         c[i].read = &cycle->read_events[i];
         c[i].write = &cycle->write_events[i];
+        //初始化fd默认值
         c[i].fd = (ngx_socket_t) -1;
 
         next = &c[i];
     } while (i);
-
+    //空闲链接是第一个
     cycle->free_connections = next;
+    //空闲链接数量等于总数
     cycle->free_connection_n = cycle->connection_n;
 
     /* for each listening socket */
 
     ls = cycle->listening.elts;
     for (i = 0; i < cycle->listening.nelts; i++) {
-
+        //这是linux的特性，防止惊群
+/**
+ * SO_RESUEPORT后，每个进程可以自己创建socket、bind、listen、accept相同的地址和端口，
+ * 各自是独立平等的。让多进程监听同一个端口，各个进程中accept socket fd不一样，有新连接建立时，
+ * 内核只会唤醒一个进程来accept，并且保证唤醒的均衡性。
+ */ 
 #if (NGX_HAVE_REUSEPORT)
         if (ls[i].reuseport && ls[i].worker != ngx_worker) {
             continue;
@@ -1249,7 +1262,7 @@ ngx_event_core_init_conf(ngx_cycle_t *cycle, void *conf)
     }
 
 #endif
-
+    //如果上述的module都没找到，那么就在所有module中去查找
     if (module == NULL) {
         for (i = 0; cycle->modules[i]; i++) {
 
@@ -1268,12 +1281,12 @@ ngx_event_core_init_conf(ngx_cycle_t *cycle, void *conf)
             break;
         }
     }
-
+    //如果都没找到那么就直接报错
     if (module == NULL) {
         ngx_log_error(NGX_LOG_EMERG, cycle->log, 0, "no events module found");
         return NGX_CONF_ERROR;
     }
-
+    //初始化默认值
     ngx_conf_init_uint_value(ecf->connections, DEFAULT_CONNECTIONS);
     cycle->connection_n = ecf->connections;
 
